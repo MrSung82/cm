@@ -25,17 +25,22 @@ class Array
 {
 public:
 	/** Creates an empty array. */
-	Array() = default;
+	Array()
+	{
+		m_data = m_staticBuffer;
+	}
 
 	/** Creates an array of n elements. */
 	explicit Array(size_t n)
 	{
-		setSize(n);
+		m_data = m_staticBuffer;
+		resize(n);
 	}
 
 	/** Copy by value. */
 	Array(const Array<T,N>& other)
 	{
+		m_data = m_staticBuffer;
 		*this = other;
 	}
 
@@ -61,7 +66,7 @@ public:
 	}
 
 	/** Adds an element to the end of the array. */
-	void add(const T& item)
+	void push_back(const T& item)
 	{
 		if (m_len + 1 > m_cap)
 			realloc(m_len + 1);
@@ -69,17 +74,17 @@ public:
 	}
 
 	/** Adds an element before specified index. */
-	void add(size_t index, const T& item)
+	void insert(size_t index, const T& item)
 	{
 		assert(index <= size());
 
-		setSize(m_len + 1);
+		resize(m_len + 1);
 		std::copy_backward(m_data + index, m_data + m_len, m_data + m_len + 1);
 		m_data[index] = item;
 	}
 
 	/** Sets number of elements in the array. */
-	void setSize(size_t nSize)
+	void resize(size_t nSize)
 	{
 		if (nSize == m_len)
 			return;
@@ -91,7 +96,7 @@ public:
 		{
 			if (nSize > m_cap)
 				realloc(nSize);
-			std::uninitialized_fill_n(m_data[len], nSize - m_len, T());
+			std::uninitialized_fill_n(m_data[m_len], nSize - m_len, T());
 		}
 
 		m_len = nSize;
@@ -106,7 +111,7 @@ public:
 	/** Sets number of elements in the array to 0. */
 	void clear()
 	{
-		setSize(0);
+		resize(0);
 	}
 
 	/** Returns pointer to the beginning of the array (inclusive). */
@@ -154,7 +159,7 @@ public:
 private:
 	T*		m_data{};
 	size_t	m_len{};
-	size_t	m_cap{};
+	size_t	m_cap{N};
 	T		m_staticBuffer[N];
 
 	void releaseBuffer()
@@ -162,7 +167,8 @@ private:
 		std::destroy_n(m_data, m_len);
 		if (isDynamic())
 		{
-			delete[] reinterpret_cast<byte_t*>(m_data);
+			byte_t* pRawBytes = reinterpret_cast<byte_t*>(m_data);
+			delete[] pRawBytes;
 			m_data = &m_staticBuffer[0];
 			m_cap = N;
 		}
@@ -173,18 +179,18 @@ private:
 		if (nSize > m_cap)
 		{
 			assert(nSize > N);
-			size_t cap = m_cap * 2;
-			if (cap < 16)
-				cap = 16;
+			size_t cap = m_cap;
+			if (cap < 4)
+				cap = 4;
 			while (cap < nSize)
 				cap = cap + (cap >> 1);
 			
-			std::shared_ptr<byte_t[]> pNewData(new byte_t[cap]);
+			std::unique_ptr<byte_t[]> pNewData(new byte_t[cap * sizeof(T)]);
 			
 			std::uninitialized_copy_n(m_data, m_len, reinterpret_cast<T*>(pNewData.get()));
 			releaseBuffer();
 
-			m_data = m_dynamicBuffer = reinterpret_cast<T*>(pNewData.release());
+			m_data = reinterpret_cast<T*>(pNewData.release());
 			m_cap = cap;
 		}
 		else if (nSize <= N && isDynamic() && bShrinkToStatic)
@@ -194,13 +200,6 @@ private:
 			
 			releaseBuffer();
 		}
-	}
-
-	/** Copy in reverse order. */
-	void rcopy(T* dst, const T* src, int count)
-	{
-		for ( int i = count-1 ; i >= 0 ; --i )
-			dst[i] = src[i];
 	}
 };
 
