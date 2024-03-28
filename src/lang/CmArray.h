@@ -1,11 +1,14 @@
-#ifndef _LANG_ARRAY_H
-#define _LANG_ARRAY_H
+#ifndef CM_LANG_ARRAY_H
+#define CM_LANG_ARRAY_H
 
+#include "lang/CmInt.h"
+#include "lang/CmMemory.h"
 
 #include <assert.h>
-#include <lang/internal/config_inl.h>
+#include <algorithm>
 
-
+namespace cm
+{
 namespace lang
 {
 
@@ -15,26 +18,23 @@ namespace lang
  * @param T Type of array element.
  * @param N Statically allocated buffer size.
  * @author Jani Kajala (jani.kajala@helsinki.fi)
+ * @author Marat Sungatullin (mrsung82)
  */
-template <class T, int N=1> class Array
+template <class T, size_t N = 1> 
+class Array
 {
 public:
 	/** Creates an empty array. */
-	Array() :
-		m_data(0), m_cap(0), m_len(0), m_dynamicBuffer(0)
-	{
-	}
+	Array() = default;
 
 	/** Creates an array of n elements. */
-	explicit Array( int n ) :
-		m_data(0), m_cap(0), m_len(0), m_dynamicBuffer(0)
+	explicit Array(size_t n)
 	{
-		setSize( n );
+		setSize(n);
 	}
 
 	/** Copy by value. */
-	Array( const Array<T,N>& other ) :
-		m_data(0), m_cap(0), m_len(0), m_dynamicBuffer(0)
+	Array(const Array<T,N>& other)
 	{
 		*this = other;
 	}
@@ -42,63 +42,71 @@ public:
 	///
 	~Array()
 	{
-		delete[] m_dynamicBuffer;
-		m_dynamicBuffer = 0;
-		m_data = 0;
+		releaseBuffer();
 	}
 
 	/** Copy by value. */
-	Array& operator=( const Array<T,N>& other )
+	Array& operator=(const Array<T,N>& other)
 	{
-		setSize( other.m_len );
-		for ( int i = 0 ; i < m_len ; ++i )
-			m_data[i] = other.m_data[i];
+		setSize(other.m_len);
+		std::copy(other.begin(), other.end(), m_data);
 		return *this;
 	}
 
 	/** Returns ith element from the array. */
-	T& operator[]( int index )
+	T& operator[](size_t index)
 	{
-		assert( index >= 0 && index < m_len );
+		assert(index < m_len);
 		return m_data[index];
 	}
 
 	/** Adds an element to the end of the array. */
-	void add( const T& item )
+	void add(const T& item)
 	{
-		T itemCopy( item );
-		if ( m_len >= m_cap )
-			realloc( m_len+1 );
-		m_data[m_len++] = itemCopy;
+		if (m_len + 1 > m_cap)
+			realloc(m_len + 1);
+		construct_at(&m_data[m_len++], item);
 	}
 
 	/** Adds an element before specified index. */
-	void add( int index, const T& item )
+	void add(size_t index, const T& item)
 	{
-		assert( index >= 0 && index <= size() );
+		assert(index <= size());
 
-		T itemCopy( item );
-		setSize( m_len + 1 );
-		rcopy( m_data+(index+1), m_data+index, m_len-(index+1) );
-		m_data[index] = itemCopy;
+		setSize(m_len + 1);
+		std::copy_backward(m_data + index, m_data + m_len, m_data + m_len + 1);
+		m_data[index] = item;
 	}
 
 	/** Sets number of elements in the array. */
-	void setSize( int size )
+	void setSize(size_t nSize)
 	{
-		for ( int i = size ; i < m_len ; ++i )
-			m_data[i] = T();
+		if (nSize == m_len)
+			return;
+		if (nSize < m_len)
+		{
+			std::destroy_n(&m_data[nSize], m_len - nSize);
+		}
+		else 
+		{
+			if (nSize > m_cap)
+				realloc(nSize);
+			std::uninitialized_fill_n(m_data[len], nSize - m_len, T());
+		}
 
-		if ( size > m_cap )
-			realloc( size );
+		m_len = nSize;
+	}
 
-		m_len = size;
+	/** Tries to turn storage to static. */
+	void tryTurnToStatic()
+	{
+		realloc(m_len, true);
 	}
 
 	/** Sets number of elements in the array to 0. */
 	void clear()
 	{
-		setSize( 0 );
+		setSize(0);
 	}
 
 	/** Returns pointer to the beginning of the array (inclusive). */
@@ -110,18 +118,18 @@ public:
 	/** Returns pointer to the end of the array (exclusive). */
 	T* end()
 	{
-		return m_data+m_len;
+		return m_data + m_len;
 	}
 
 	/** Returns ith element from the array. */
-	const T& operator[]( int index ) const
+	const T& operator[](size_t index) const
 	{
-		assert( index >= 0 && index < m_len );
+		assert(index < m_len);
 		return m_data[index];
 	}
 
 	/** Returns number of elements in the array. */
-	int size() const
+	size_t size() const
 	{
 		return m_len;
 	}
@@ -135,64 +143,61 @@ public:
 	/** Returns pointer to the end of the array (exclusive). */
 	const T* end() const
 	{
-		return m_data+m_len;
+		return m_data + m_len;
+	}
+
+	bool isDynamic() const
+	{
+		return m_data != &m_staticBuffer[0];
 	}
 
 private:
-	T*		m_data;
-	int		m_cap;
-	int		m_len;
-	T*		m_dynamicBuffer;
+	T*		m_data{};
+	size_t	m_len{};
+	size_t	m_cap{};
 	T		m_staticBuffer[N];
 
-	void realloc( int size )
+	void releaseBuffer()
 	{
-		if ( size > N )
+		std::destroy_n(m_data, m_len);
+		if (isDynamic())
 		{
-			int cap = m_cap * 2;
-			if ( cap < 16 )
-				cap = 16;
-			if ( cap < size )
-				cap = size;
-			
-			T* data = new T[cap];
-			int count = m_len;
-			if ( count > cap )
-				count = cap;
-			for ( int i = 0 ; i < count ; ++i )
-			{
-				data[i] = m_data[i];
-				m_data[i] = T();
-			}
-			delete[] m_dynamicBuffer;
-			m_dynamicBuffer = 0;
+			delete[] reinterpret_cast<byte_t*>(m_data);
+			m_data = &m_staticBuffer[0];
+			m_cap = N;
+		}
+	}
 
-			m_data = m_dynamicBuffer = data;
+	void realloc(size_t nSize, bool bShrinkToStatic = false)
+	{
+		if (nSize > m_cap)
+		{
+			assert(nSize > N);
+			size_t cap = m_cap * 2;
+			if (cap < 16)
+				cap = 16;
+			while (cap < nSize)
+				cap = cap + (cap >> 1);
+			
+			std::shared_ptr<byte_t[]> pNewData(new byte_t[cap]);
+			
+			std::uninitialized_copy_n(m_data, m_len, reinterpret_cast<T*>(pNewData.get()));
+			releaseBuffer();
+
+			m_data = m_dynamicBuffer = reinterpret_cast<T*>(pNewData.release());
 			m_cap = cap;
 		}
-		else
+		else if (nSize <= N && isDynamic() && bShrinkToStatic)
 		{
-			T* data = m_staticBuffer;
-
-			if ( m_len > N )
-			{
-				assert( size < m_len );
-				for ( int i = 0 ; i < size ; ++i )
-				{
-					data[i] = m_data[i];
-					m_data[i] = T();
-				}
-				delete[] m_dynamicBuffer;
-				m_dynamicBuffer = 0;
-			}
-
-			m_data = data;
-			m_cap = size;
+			assert(nSize < m_len);
+			std::uninitialized_copy_n(m_data, nSize, m_staticBuffer);
+			
+			releaseBuffer();
 		}
 	}
 
 	/** Copy in reverse order. */
-	void rcopy( T* dst, const T* src, int count )
+	void rcopy(T* dst, const T* src, int count)
 	{
 		for ( int i = count-1 ; i >= 0 ; --i )
 			dst[i] = src[i];
@@ -200,7 +205,7 @@ private:
 };
 
 
-} // lang
+} // end of lang
 
-
-#endif // _LANG_ARRAY_H
+} // end of cm
+#endif // CM_LANG_ARRAY_H
